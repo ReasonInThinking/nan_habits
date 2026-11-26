@@ -23,6 +23,11 @@ void playSound(String name) {
       .catchError((_) => ProcessResult(0, 0, '', ''));
 }
 
+String todayIsoString() {
+  final now = DateTime.now();
+  return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+}
+
 class NanHabitsApp extends StatelessWidget {
   const NanHabitsApp({super.key});
 
@@ -41,68 +46,43 @@ class Habit {
   String id;
   String title;
   int totalDays;
-  String startIso;
-  List<int> doneDays;
+  List<String> doneDates; // Список дат YYYY-MM-DD, когда привычка выполнена
 
   Habit({
     required this.id,
     required this.title,
     required this.totalDays,
-    required this.startIso,
-    required this.doneDays,
+    required this.doneDates,
   });
 
-  bool get isCompleted => totalDays > 0 && doneDays.length >= totalDays;
-
-  DateTime get startDate {
-    final p = startIso.split('-');
-    if (p.length == 3) {
-      return DateTime(
-        int.tryParse(p.elementAt(0)) ?? DateTime.now().year,
-        int.tryParse(p.elementAt(1)) ?? DateTime.now().month,
-        int.tryParse(p.elementAt(2)) ?? DateTime.now().day,
-      );
-    }
-    final now = DateTime.now();
-    return DateTime(now.year, now.month, now.day);
-  }
-
-  int get todayIndex {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final diff = today.difference(startDate).inDays;
-    return (diff >= 0 && diff < totalDays) ? diff : -1;
-  }
+  bool get isCompleted => totalDays > 0 && doneDates.length >= totalDays;
+  bool get isDoneToday => doneDates.contains(todayIsoString());
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'title': title,
         'totalDays': totalDays,
-        'startIso': startIso,
-        'doneDays': doneDays,
+        'doneDates': doneDates,
       };
 
   factory Habit.fromJson(Map<String, dynamic> json) {
-    final raw = json['doneDays'];
-    final list = <int>[];
+    final raw = json['doneDates'];
+    final list = <String>[];
     if (raw is List) {
       for (final x in raw) {
-        if (x is int) list.add(x);
+        if (x is String) list.add(x);
       }
     }
-    final now = DateTime.now();
-    final fallback =
-        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-
     return Habit(
-      id: json['id']?.toString() ?? now.microsecondsSinceEpoch.toString(),
-      title: json['title']?.toString() ?? 'Импульс',
+      id: json['id']?.toString() ??
+          DateTime.now().microsecondsSinceEpoch.toString(),
+      title: json['title']?.toString() ?? 'Привычка',
       totalDays: json['totalDays'] is int ? json['totalDays'] as int : 14,
-      startIso: json['startIso']?.toString() ?? fallback,
-      doneDays: list,
+      doneDates: list,
     );
   }
 }
+
 
 
 class HabitReactorScreen extends StatefulWidget {
@@ -114,24 +94,24 @@ class HabitReactorScreen extends StatefulWidget {
 
 class _HabitReactorScreenState extends State<HabitReactorScreen> {
   final TextEditingController _input = TextEditingController();
-  final Map<String, GlobalKey> _cellKeys = {};
-  final Set<int> _touched = {};
 
   List<Habit> _habits = [];
   int _selectedDays = 14;
-  int _mode = 0; // 0 = Активные, 1 = Архив (Завершённые)
+  int _mode = 0; // 0 = Актив (сегодня), 1 = Кэш (до завтра), 2 = Архив
   double _dragX = 0;
-  bool? _paintMode;
 
-  List<Habit> get _activeList =>
-      _habits.where((h) => !h.isCompleted).toList();
+  List<Habit> get _activeTodayList =>
+      _habits.where((h) => !h.isCompleted && !h.isDoneToday).toList();
 
-  List<Habit> get _completedList =>
+  List<Habit> get _cachedTodayList =>
+      _habits.where((h) => !h.isCompleted && h.isDoneToday).toList();
+
+  List<Habit> get _archivedList =>
       _habits.where((h) => h.isCompleted).toList();
 
   String get _savePath {
     final home = Platform.environment['HOME'] ?? '.';
-    return '$home/.nan_habits_reactor.json';
+    return '$home/.nan_habits_v2.json';
   }
 
   @override
@@ -167,19 +147,14 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
   void _launchHabit() {
     final text = _input.text.trim();
     if (text.isEmpty) return;
-    final now = DateTime.now();
-    final iso =
-        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-
     setState(() {
       _habits.insert(
         0,
         Habit(
-          id: now.microsecondsSinceEpoch.toString(),
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
           title: text,
           totalDays: _selectedDays,
-          startIso: iso,
-          doneDays: <int>[],
+          doneDates: <String>[],
         ),
       );
       _input.clear();
@@ -190,89 +165,53 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
     _save();
   }
 
-
-  void _rotateOrbit({required bool forward, bool chargeToday = false}) {
-    final active = _activeList;
-    if (active.isEmpty) return;
-
+  void _completeForToday(Habit habit) {
+    final today = todayIsoString();
     setState(() {
-      _paintMode = null;
-      _touched.clear();
+      if (!habit.doneDates.contains(today)) {
+        habit.doneDates.add(today);
+      }
       _dragX = 0;
-
-      final current = active.first;
-      if (chargeToday) {
-        final tIdx = current.todayIndex;
-        if (tIdx != -1 && !current.doneDays.contains(tIdx)) {
-          current.doneDays.add(tIdx);
-        } else {
-          for (int i = 0; i < current.totalDays; i++) {
-            if (!current.doneDays.contains(i)) {
-              current.doneDays.add(i);
-              break;
-            }
-          }
-        }
-      }
-
-      if (!current.isCompleted && active.length > 1) {
-        if (forward) {
-          _habits.remove(current);
-          _habits.add(current);
-        } else {
-          final lastActive = active.last;
-          _habits.remove(lastActive);
-          _habits.insert(0, lastActive);
-        }
-      }
     });
-
-    playSound(chargeToday ? 'complete' : 'audio-volume-change');
+    playSound(habit.isCompleted ? 'complete' : 'message-new-instant');
     _save();
   }
 
-  void _paintEnergyCell(Habit current, Offset pos, {required bool isDown}) {
-    if (isDown) {
-      _paintMode = null;
-      _touched.clear();
-    }
+  void _undoToday(Habit habit) {
+    final today = todayIsoString();
+    setState(() {
+      habit.doneDates.remove(today);
+      _mode = 0;
+      _dragX = 0;
+    });
+    playSound('audio-volume-change');
+    _save();
+  }
 
-    for (int i = 0; i < current.totalDays; i++) {
-      final key = _cellKeys['${current.id}_$i'];
-      final ctx = key?.currentContext;
-      if (ctx == null || !ctx.mounted) continue;
+  void _rotateOrbit({required bool forward}) {
+    final active = _activeTodayList;
+    if (active.length < 2) return;
 
-      final box = ctx.findRenderObject();
-      if (box is! RenderBox || !box.hasSize) continue;
-
-      final local = box.globalToLocal(pos);
-      if (local.dx >= 0 &&
-          local.dy >= 0 &&
-          local.dx <= box.size.width &&
-          local.dy <= box.size.height) {
-        if (_paintMode == null) {
-          _paintMode = !current.doneDays.contains(i);
-        }
-        if (!_touched.contains(i)) {
-          _touched.add(i);
-          setState(() {
-            if (_paintMode!) {
-              if (!current.doneDays.contains(i)) current.doneDays.add(i);
-            } else {
-              current.doneDays.remove(i);
-            }
-          });
-          playSound(
-              current.isCompleted ? 'complete' : 'audio-volume-change');
-          _save();
-        }
-        break;
+    setState(() {
+      _dragX = 0;
+      if (forward) {
+        final first = active.first;
+        _habits.remove(first);
+        _habits.add(first);
+      } else {
+        final last = active.last;
+        _habits.remove(last);
+        _habits.insert(0, last);
       }
-    }
+    });
+    playSound('audio-volume-change');
+    _save();
   }
 
 
-  Widget _buildSideMagneticDock(int activeCount, int archivedCount) {
+
+  Widget _buildSideMagneticDock(
+      int activeCount, int cachedCount, int archivedCount) {
     Widget capsule({
       required int idx,
       required String label,
@@ -290,7 +229,7 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOutCubic,
           width: 68,
-          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 6),
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 6),
           decoration: BoxDecoration(
             color: selected ? accent.withOpacity(0.18) : NeoTheme.panel,
             borderRadius: BorderRadius.circular(24),
@@ -313,14 +252,14 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
             children: [
               Icon(
                 icon,
-                size: 22,
+                size: 20,
                 color: selected ? accent : NeoTheme.textDim,
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               Text(
                 '$count',
                 style: TextStyle(
-                  fontSize: 18,
+                  fontSize: 17,
                   fontWeight: FontWeight.w900,
                   color: selected ? NeoTheme.textMain : NeoTheme.textDim,
                 ),
@@ -331,8 +270,8 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
                 child: Text(
                   label,
                   style: TextStyle(
-                    fontSize: 10,
-                    letterSpacing: 1.5,
+                    fontSize: 9,
+                    letterSpacing: 1.4,
                     fontWeight: FontWeight.bold,
                     color: selected ? accent : NeoTheme.textDim,
                   ),
@@ -345,7 +284,7 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 24),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 20),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -356,9 +295,17 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
             icon: Icons.bolt_rounded,
             accent: NeoTheme.cyan,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           capsule(
             idx: 1,
+            label: 'КЭШ',
+            count: cachedCount,
+            icon: Icons.hourglass_bottom_rounded,
+            accent: NeoTheme.violet,
+          ),
+          const SizedBox(height: 12),
+          capsule(
+            idx: 2,
             label: 'АРХИВ',
             count: archivedCount,
             icon: Icons.workspace_premium_rounded,
@@ -379,85 +326,47 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
       ..add(30)
       ..add(60);
 
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 680),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      return Container(
+      constraints: const BoxConstraints(maxWidth: 560),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
       decoration: BoxDecoration(
         color: NeoTheme.panel,
-        borderRadius: BorderRadius.circular(26),
-        border: Border.all(color: NeoTheme.violet.withOpacity(0.5), width: 1.4),
-        boxShadow: <BoxShadow>[
-          BoxShadow(
-            color: NeoTheme.violet.withOpacity(0.16),
-            blurRadius: 24,
-            offset: const Offset(0, 6),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(22),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Row(
             children: [
-              Container(
-                width: 10,
-                height: 10,
-                decoration: const BoxDecoration(
-                  color: NeoTheme.cyan,
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(width: 12),
               Expanded(
                 child: TextField(
                   controller: _input,
                   onSubmitted: (_) => _launchHabit(),
                   style: const TextStyle(
                     fontSize: 16,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w500,
                     color: NeoTheme.textMain,
                   ),
                   decoration: const InputDecoration(
-                    hintText: 'Задать новый цикл привычки...',
+                    hintText: 'Новая привычка...',
                     hintStyle: TextStyle(color: NeoTheme.textDim),
                     border: InputBorder.none,
                     isDense: true,
                   ),
                 ),
               ),
-              const SizedBox(width: 10),
-              GestureDetector(
-                onTap: _launchHabit,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: <Color>[NeoTheme.violet, NeoTheme.cyan],
-                    ),
-                    borderRadius: BorderRadius.circular(18),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.rocket_launch_rounded,
-                          size: 16, color: Colors.black),
-                      SizedBox(width: 6),
-                      Text(
-                        'ЗАПУСК',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 1.0,
-                          color: Colors.black,
-                        ),
-                      ),
-                    ],
-                  ),
+              IconButton(
+                tooltip: 'Добавить',
+                onPressed: _launchHabit,
+                icon: const Icon(
+                  Icons.arrow_upward_rounded,
+                  color: NeoTheme.cyan,
+                  size: 24,
                 ),
               ),
             ],
           ),
+
           const SizedBox(height: 10),
           Row(
             children: [
@@ -519,76 +428,83 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
   }
 
 
-  Widget _buildOrbitWing({
+
+   Widget _buildOrbitWing({
     required IconData icon,
     required bool enabled,
     required VoidCallback onTap,
   }) {
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: enabled ? onTap : null,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        width: 46,
-        height: 110,
+        width: 40,
+        height: 88,
         decoration: BoxDecoration(
-          color: enabled ? NeoTheme.panel : NeoTheme.bg,
-          borderRadius: BorderRadius.circular(24),
+          color: enabled ? Colors.white.withOpacity(0.03) : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: enabled
-                ? NeoTheme.cyan.withOpacity(0.55)
-                : NeoTheme.border.withOpacity(0.35),
-            width: 1.5,
+                ? Colors.white.withOpacity(0.08)
+                : Colors.white.withOpacity(0.02),
+            width: 1.0,
           ),
         ),
         child: Icon(
           icon,
-          size: 28,
-          color: enabled ? NeoTheme.cyan : NeoTheme.textDim.withOpacity(0.25),
+          size: 24,
+          color: enabled
+              ? NeoTheme.textMain.withOpacity(0.75)
+              : NeoTheme.textDim.withOpacity(0.2),
         ),
       ),
     );
   }
 
-  Widget _buildHologramMonolith(List<Habit> active) {
+  Widget _buildFocusMonolith(List<Habit> active) {
     if (active.isEmpty) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              Icons.blur_circular_rounded,
-              size: 64,
-              color: NeoTheme.violet.withOpacity(0.6),
+              Icons.check_circle_outline_rounded,
+              size: 56,
+              color: NeoTheme.cyan.withOpacity(0.6),
             ),
-            const SizedBox(height: 14),
-            const Text(
-              'ОРБИТА СВОБОДНА',
+            const SizedBox(height: 16),
+            Text(
+              'На сегодня всё выполнено',
               style: TextStyle(
-                fontSize: 16,
-                letterSpacing: 2.0,
-                fontWeight: FontWeight.w900,
-                color: NeoTheme.textMain,
+                fontSize: 20,
+                letterSpacing: 1.0,
+                fontWeight: FontWeight.w400,
+                color: NeoTheme.textMain.withOpacity(0.88),
               ),
             ),
-            const SizedBox(height: 6),
-            const Text(
-              'Задайте новый цикл в консоли снизу',
-              style: TextStyle(fontSize: 13, color: NeoTheme.textDim),
+            const SizedBox(height: 8),
+            Text(
+              'Привычки отдыхают в «Кэше» до завтра, или добавьте новую снизу',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                letterSpacing: 0.3,
+                color: NeoTheme.textDim.withOpacity(0.75),
+              ),
             ),
           ],
         ),
       );
     }
 
+
     final current = active.first;
     final canSwitch = active.length > 1;
     final ratio = current.totalDays > 0
-        ? (current.doneDays.length / current.totalDays).clamp(0.0, 1.0)
+        ? (current.doneDates.length / current.totalDays).clamp(0.0, 1.0)
         : 0.0;
     final percent = (ratio * 100).round();
-    final tIdx = current.todayIndex;
-    final isTodayDone = tIdx != -1 && current.doneDays.contains(tIdx);
-
 
     return Listener(
       onPointerSignal: (e) {
@@ -596,317 +512,200 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
           _rotateOrbit(forward: e.scrollDelta.dy > 0);
         }
       },
-      child: Column(
+      child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _buildOrbitWing(
-                icon: Icons.keyboard_arrow_left_rounded,
-                enabled: canSwitch,
-                onTap: () => _rotateOrbit(forward: false),
-              ),
-              const SizedBox(width: 18),
-              Expanded(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 560),
-                  child: Transform.translate(
-                    offset: Offset(_dragX, 0),
-                    child: Transform.rotate(
-                      angle: (_dragX / 1100).clamp(-0.14, 0.14),
-                      child: Container(
-                        key: ValueKey('holo_${current.id}'),
-                        padding: const EdgeInsets.all(26),
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: <Color>[NeoTheme.panel, Color(0xFF0C101B)],
-                          ),
-                          borderRadius: BorderRadius.circular(30),
-                          border: Border.all(
-                            color: _dragX.abs() > 25
-                                ? NeoTheme.cyan
-                                : NeoTheme.violet.withOpacity(0.55),
-                            width: 1.6,
-                          ),
-                          boxShadow: <BoxShadow>[
-                            BoxShadow(
-                              color: NeoTheme.cyan.withOpacity(0.12),
-                              blurRadius: 30,
-                              spreadRadius: 2,
-                            ),
-                          ],
+          _buildOrbitWing(
+            icon: Icons.keyboard_arrow_left_rounded,
+            enabled: canSwitch,
+            onTap: () => _rotateOrbit(forward: false),
+          ),
+          const SizedBox(width: 18),
+                   Expanded(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onPanUpdate: (d) => setState(() => _dragX += d.delta.dx),
+                onPanEnd: (_) {
+                  if (_dragX > 90) {
+                    _completeForToday(current);
+                  } else if (_dragX < -90 && canSwitch) {
+                    _rotateOrbit(forward: true);
+                  } else {
+                    setState(() => _dragX = 0);
+                  }
+                },
+                child: Transform.translate(
+                  offset: Offset(_dragX, 0),
+                  child: Transform.rotate(
+                    angle: (_dragX / 1000).clamp(-0.14, 0.14),
+                    child: Container(
+                      key: ValueKey('focus_${current.id}'),
+                      padding: const EdgeInsets.all(28),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: <Color>[NeoTheme.panel, Color(0xFF0C101B)],
                         ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onPanUpdate: (d) =>
-                                  setState(() => _dragX += d.delta.dx),
-                              onPanEnd: (_) {
-                                if (_dragX > 90) {
-                                  _rotateOrbit(
-                                      forward: true, chargeToday: true);
-                                } else if (_dragX < -90) {
-                                  _rotateOrbit(forward: true);
-                                } else {
-                                  setState(() => _dragX = 0);
-                                }
-                              },
-                              child: Row(
-                                children: [
-                                  SizedBox(
-                                    width: 62,
-                                    height: 62,
-                                    child: Stack(
-                                      alignment: Alignment.center,
-                                      children: [
-                                        CircularProgressIndicator(
-                                          value: ratio,
-                                          strokeWidth: 5,
-                                          backgroundColor: NeoTheme.panelLight,
-                                          valueColor:
-                                              const AlwaysStoppedAnimation<
-                                                  Color>(NeoTheme.cyan),
-                                        ),
-                                        Text(
-                                          '$percent%',
-                                          style: const TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w900,
-                                            color: NeoTheme.cyan,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Text(
-                                              'ОРБИТА 1 / ${active.length}  •  ${current.doneDays.length} ИЗ ${current.totalDays}',
-                                              style: const TextStyle(
-                                                fontSize: 10,
-                                                letterSpacing: 1.2,
-                                                fontWeight: FontWeight.bold,
-                                                color: NeoTheme.violet,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            Container(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                      horizontal: 7,
-                                                      vertical: 2),
-                                              decoration: BoxDecoration(
-                                                color: isTodayDone
-                                                    ? NeoTheme.cyan
-                                                        .withOpacity(0.2)
-                                                    : NeoTheme.amber
-                                                        .withOpacity(0.18),
-                                                borderRadius:
-                                                    BorderRadius.circular(6),
-                                              ),
-                                              child: Text(
-                                                isTodayDone
-                                                    ? 'СЕГОДНЯ ✓'
-                                                    : 'ЖДЁТ СЕГОДНЯ',
-                                                style: TextStyle(
-                                                  fontSize: 9,
-                                                  fontWeight: FontWeight.w900,
-                                                  color: isTodayDone
-                                                      ? NeoTheme.cyan
-                                                      : NeoTheme.amber,
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 5),
-                                        Text(
-                                          current.title,
-                                          style: const TextStyle(
-                                            fontSize: 22,
-                                            fontWeight: FontWeight.w800,
-                                            color: NeoTheme.textMain,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  IconButton(
-                                    tooltip: 'Удалить',
-                                    icon: const Icon(Icons.close_rounded,
-                                        color: NeoTheme.textDim),
-                                    onPressed: () {
-                                      setState(() {
-                                        _habits.remove(current);
-                                        _dragX = 0;
-                                      });
-                                      _save();
-                                    },
-                                  ),
-                                ],
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+
+
+
+
+                                                            child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                'Осталось на сегодня: ${active.length}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  letterSpacing: 0.4,
+                                  fontWeight: FontWeight.w400,
+                                  color: NeoTheme.textDim.withOpacity(0.55),
+                                ),
                               ),
-                            ),
-
-
-
-                        const SizedBox(height: 22),
-                        Listener(
-                          onPointerDown: (e) => _paintEnergyCell(
-                              current, e.position,
-                              isDown: true),
-                          onPointerMove: (e) => _paintEnergyCell(
-                              current, e.position,
-                              isDown: false),
-                          onPointerUp: (_) {
-                            _paintMode = null;
-                            _touched.clear();
-                          },
-                          child: Wrap(
-                            spacing: 9,
-                            runSpacing: 9,
-                            alignment: WrapAlignment.center,
-                            children: List.generate(current.totalDays, (i) {
-                              final cellKey = _cellKeys.putIfAbsent(
-                                  '${current.id}_$i', () => GlobalKey());
-                              final done = current.doneDays.contains(i);
-                              final date =
-                                  current.startDate.add(Duration(days: i));
-                              final now = DateTime.now();
-                              final isToday = date.year == now.year &&
-                                  date.month == now.month &&
-                                  date.day == now.day;
-                              const wNames = <String>[
-                                'Пн',
-                                'Вт',
-                                'Ср',
-                                'Чт',
-                                'Пт',
-                                'Сб',
-                                'Вс'
-                              ];
-                              final wDay =
-                                  wNames[(date.weekday - 1).clamp(0, 6)];
-
-                              return AnimatedContainer(
-                                key: cellKey,
-                                duration: const Duration(milliseconds: 160),
-                                width: 48,
-                                height: 54,
-                                alignment: Alignment.center,
-                                decoration: BoxDecoration(
-                                  gradient: done
-                                      ? const LinearGradient(
-                                          colors: <Color>[
-                                            NeoTheme.cyan,
-                                            NeoTheme.violet,
-                                          ],
-                                        )
-                                      : null,
-                                  color: done ? null : NeoTheme.panelLight,
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                    color: done
-                                        ? NeoTheme.cyan
-                                        : (isToday
-                                            ? Colors.white
-                                            : NeoTheme.border),
-                                    width: isToday ? 1.8 : 1.0,
+                              const Spacer(),
+                              IconButton(
+                                tooltip: 'Удалить привычку',
+                                icon: Icon(Icons.close_rounded,
+                                    size: 18,
+                                    color: NeoTheme.textDim.withOpacity(0.55)),
+                                onPressed: () {
+                                  setState(() {
+                                    _habits.remove(current);
+                                    _dragX = 0;
+                                  });
+                                  _save();
+                                },
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          SizedBox(
+                            width: 136,
+                            height: 136,
+                            child: Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                SizedBox.expand(
+                                  child: CircularProgressIndicator(
+                                    value: ratio,
+                                    strokeWidth: 3.0,
+                                    strokeCap: StrokeCap.round,
+                                    backgroundColor:
+                                        Colors.white.withOpacity(0.05),
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                        NeoTheme.cyan.withOpacity(0.7)),
                                   ),
                                 ),
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
+                                Column(
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Text(
-                                      isToday ? 'СЕГ' : wDay,
+                                      '$percent%',
                                       style: TextStyle(
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.w800,
-                                        color: done
-                                            ? Colors.black87
-                                            : (isToday
-                                                ? NeoTheme.cyan
-                                                : NeoTheme.textDim),
+                                        fontSize: 28,
+                                        letterSpacing: 1.0,
+                                        fontWeight: FontWeight.w300,
+                                        color: NeoTheme.textMain
+                                            .withOpacity(0.88),
                                       ),
                                     ),
+                                    const SizedBox(height: 4),
                                     Text(
-                                      '${date.day}',
+                                      '${current.doneDates.length} из ${current.totalDays} дн.',
                                       style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w900,
-                                        color: done
-                                            ? Colors.black
-                                            : NeoTheme.textMain,
+                                        fontSize: 12,
+                                        letterSpacing: 0.6,
+                                        fontWeight: FontWeight.w400,
+                                        color: NeoTheme.textDim
+                                            .withOpacity(0.75),
                                       ),
                                     ),
                                   ],
                                 ),
-                              );
-                            }),
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 26),
+                          Text(
+                            current.title,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 27,
+                              height: 1.25,
+                              letterSpacing: 1.4,
+                              fontWeight: FontWeight.w400,
+                              color: NeoTheme.textMain.withOpacity(0.9),
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                          Container(
+                            width: 44,
+                            height: 1.5,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => _completeForToday(current),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    width: 32,
+                                    height: 32,
+                                    decoration: BoxDecoration(
+                                      color: NeoTheme.cyan.withOpacity(0.08),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Icon(
+                                      Icons.check_rounded,
+                                      size: 18,
+                                      color: NeoTheme.cyan.withOpacity(0.75),
+                                    ),
+                                  ),
+
+                                  const SizedBox(width: 12),
+                                  Text(
+                                    'Выполнить сегодня',
+                                    style: TextStyle(
+                                      fontSize: 17,
+                                      letterSpacing: 0.9,
+                                      fontWeight: FontWeight.w500,
+                                      color:
+                                          NeoTheme.textMain.withOpacity(0.78),
+                                    ),
+
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-              ),
-               ),
-              const SizedBox(width: 18),
-              _buildOrbitWing(
-                icon: Icons.keyboard_arrow_right_rounded,
-                enabled: canSwitch,
-                onTap: () => _rotateOrbit(forward: true),
-              ),
-            ],
-          ),
-          const SizedBox(height: 18),
-          GestureDetector(
-            onTap: () => _rotateOrbit(forward: true, chargeToday: true),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 11),
-              decoration: BoxDecoration(
-                color: isTodayDone
-                    ? NeoTheme.panel
-                    : NeoTheme.cyan.withOpacity(0.16),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: isTodayDone ? NeoTheme.border : NeoTheme.cyan,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    isTodayDone
-                        ? Icons.check_circle_rounded
-                        : Icons.bolt_rounded,
-                    size: 18,
-                    color: isTodayDone ? NeoTheme.textDim : NeoTheme.cyan,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    isTodayDone ? 'СЕГОДНЯ ЗАРЯЖЕНО' : 'ЗАРЯДИТЬ СЕГОДНЯ',
-                    style: TextStyle(
-                      fontSize: 12,
-                      letterSpacing: 1.1,
-                      fontWeight: FontWeight.w900,
-                      color: isTodayDone ? NeoTheme.textDim : NeoTheme.cyan,
-                    ),
-                  ),
-                ],
               ),
             ),
+          ),
+
+          const SizedBox(width: 18),
+          _buildOrbitWing(
+            icon: Icons.keyboard_arrow_right_rounded,
+            enabled: canSwitch,
+            onTap: () => _rotateOrbit(forward: true),
           ),
         ],
       ),
@@ -914,20 +713,22 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
   }
 
 
-  Widget _buildArchiveVault(List<Habit> archived) {
-    if (archived.isEmpty) {
+
+
+  Widget _buildCacheVault(List<Habit> cached) {
+    if (cached.isEmpty) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              Icons.workspace_premium_outlined,
-              size: 60,
-              color: NeoTheme.amber.withOpacity(0.55),
+              Icons.hourglass_empty_rounded,
+              size: 56,
+              color: NeoTheme.violet.withOpacity(0.55),
             ),
             const SizedBox(height: 12),
             const Text(
-              'АРХИВ ДОСТИЖЕНИЙ ПУСТ',
+              'КЭШ ПУСТ',
               style: TextStyle(
                 fontSize: 15,
                 letterSpacing: 1.8,
@@ -937,7 +738,7 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
             ),
             const SizedBox(height: 6),
             const Text(
-              'Зарядите все энергоячейки любого цикла, чтобы перенести его сюда',
+              'Выполненные сегодня привычки попадают сюда и вернутся завтра',
               style: TextStyle(fontSize: 13, color: NeoTheme.textDim),
             ),
           ],
@@ -947,7 +748,112 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
 
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 620),
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: ListView.separated(
+          padding: const EdgeInsets.symmetric(vertical: 20),
+          itemCount: cached.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 12),
+          itemBuilder: (_, idx) {
+            final item = cached[idx];
+            return Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: NeoTheme.panel,
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(
+                  color: NeoTheme.violet.withOpacity(0.5),
+                  width: 1.3,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: NeoTheme.violet.withOpacity(0.16),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Icon(
+                      Icons.hourglass_bottom_rounded,
+                      color: NeoTheme.violet,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.title,
+                          style: const TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                            color: NeoTheme.textMain,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'ПРОГРЕСС: ${item.doneDates.length} / ${item.totalDays} ДН.  •  ВЕРНЁТСЯ ЗАВТРА',
+                          style: const TextStyle(
+                            fontSize: 10,
+                            letterSpacing: 1.0,
+                            fontWeight: FontWeight.bold,
+                            color: NeoTheme.violet,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Отменить сегодняшнюю отметку',
+                    icon: const Icon(Icons.undo_rounded, color: NeoTheme.cyan),
+                    onPressed: () => _undoToday(item),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildArchiveVault(List<Habit> archived) {
+    if (archived.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.workspace_premium_outlined,
+              size: 56,
+              color: NeoTheme.amber.withOpacity(0.55),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'АРХИВ ПУСТ',
+              style: TextStyle(
+                fontSize: 15,
+                letterSpacing: 1.8,
+                fontWeight: FontWeight.w900,
+                color: NeoTheme.textMain,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Здесь появятся полностью завершённые циклы привычек',
+              style: TextStyle(fontSize: 13, color: NeoTheme.textDim),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
         child: ListView.separated(
           padding: const EdgeInsets.symmetric(vertical: 20),
           itemCount: archived.length,
@@ -967,8 +873,8 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
               child: Row(
                 children: [
                   Container(
-                    width: 46,
-                    height: 46,
+                    width: 44,
+                    height: 44,
                     decoration: BoxDecoration(
                       color: NeoTheme.amber.withOpacity(0.16),
                       borderRadius: BorderRadius.circular(14),
@@ -976,7 +882,7 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
                     child: const Icon(
                       Icons.workspace_premium_rounded,
                       color: NeoTheme.amber,
-                      size: 26,
+                      size: 24,
                     ),
                   ),
                   const SizedBox(width: 14),
@@ -996,7 +902,7 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
                         Text(
                           'ЦИКЛ ЗАВЕРШЁН: ${item.totalDays} / ${item.totalDays} ДН.',
                           style: const TextStyle(
-                            fontSize: 11,
+                            fontSize: 10,
                             letterSpacing: 1.1,
                             fontWeight: FontWeight.bold,
                             color: NeoTheme.amber,
@@ -1006,12 +912,11 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Перезапустить цикл',
-                    icon: const Icon(Icons.replay_rounded,
-                        color: NeoTheme.cyan),
+                    tooltip: 'Пройти цикл заново',
+                    icon: const Icon(Icons.replay_rounded, color: NeoTheme.cyan),
                     onPressed: () {
                       setState(() {
-                        item.doneDays.clear();
+                        item.doneDates.clear();
                         _mode = 0;
                       });
                       playSound('audio-volume-change');
@@ -1019,7 +924,7 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
                     },
                   ),
                   IconButton(
-                    tooltip: 'Удалить из архива',
+                    tooltip: 'Удалить',
                     icon: const Icon(Icons.delete_outline_rounded,
                         color: NeoTheme.textDim),
                     onPressed: () {
@@ -1038,8 +943,18 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final active = _activeList;
-    final archived = _completedList;
+    final active = _activeTodayList;
+    final cached = _cachedTodayList;
+    final archived = _archivedList;
+
+    Widget currentView;
+    if (_mode == 0) {
+      currentView = _buildFocusMonolith(active);
+    } else if (_mode == 1) {
+      currentView = _buildCacheVault(cached);
+    } else {
+      currentView = _buildArchiveVault(archived);
+    }
 
     return Scaffold(
       body: SafeArea(
@@ -1050,18 +965,15 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
                 padding: const EdgeInsets.fromLTRB(28, 20, 12, 22),
                 child: Column(
                   children: [
-                    Expanded(
-                      child: _mode == 0
-                          ? _buildHologramMonolith(active)
-                          : _buildArchiveVault(archived),
-                    ),
+                    Expanded(child: currentView),
                     const SizedBox(height: 16),
                     _buildCommandConsole(),
                   ],
                 ),
               ),
             ),
-            _buildSideMagneticDock(active.length, archived.length),
+            _buildSideMagneticDock(
+                active.length, cached.length, archived.length),
           ],
         ),
       ),
