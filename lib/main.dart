@@ -746,9 +746,9 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
       );
     }
 
-    return Center(
+      return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560),
+        constraints: const BoxConstraints(maxWidth: 540),
         child: ListView.separated(
           padding: const EdgeInsets.symmetric(vertical: 20),
           itemCount: cached.length,
@@ -756,59 +756,52 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
           itemBuilder: (_, idx) {
             final item = cached[idx];
             return Container(
-              padding: const EdgeInsets.all(18),
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
               decoration: BoxDecoration(
-                color: NeoTheme.panel,
+                color: NeoTheme.panel.withOpacity(0.75),
                 borderRadius: BorderRadius.circular(22),
-                border: Border.all(
-                  color: NeoTheme.violet.withOpacity(0.5),
-                  width: 1.3,
-                ),
               ),
               child: Row(
                 children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: NeoTheme.violet.withOpacity(0.16),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Icon(
-                      Icons.hourglass_bottom_rounded,
-                      color: NeoTheme.violet,
-                      size: 22,
-                    ),
+                  Icon(
+                    Icons.hourglass_bottom_rounded,
+                    color: NeoTheme.violet.withOpacity(0.55),
+                    size: 20,
                   ),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 16),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           item.title,
-                          style: const TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.bold,
-                            color: NeoTheme.textMain,
+                          style: TextStyle(
+                            fontSize: 18,
+                            letterSpacing: 1.0,
+                            fontWeight: FontWeight.w400,
+                            color: NeoTheme.textMain.withOpacity(0.88),
                           ),
                         ),
-                        const SizedBox(height: 2),
+                        const SizedBox(height: 5),
                         Text(
-                          'ПРОГРЕСС: ${item.doneDates.length} / ${item.totalDays} ДН.  •  ВЕРНЁТСЯ ЗАВТРА',
-                          style: const TextStyle(
-                            fontSize: 10,
-                            letterSpacing: 1.0,
-                            fontWeight: FontWeight.bold,
-                            color: NeoTheme.violet,
+                          '${item.doneDates.length} из ${item.totalDays} дн. · вернётся завтра',
+                          style: TextStyle(
+                            fontSize: 12,
+                            letterSpacing: 0.5,
+                            fontWeight: FontWeight.w400,
+                            color: NeoTheme.textDim.withOpacity(0.75),
                           ),
                         ),
                       ],
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Отменить сегодняшнюю отметку',
-                    icon: const Icon(Icons.undo_rounded, color: NeoTheme.cyan),
+                    tooltip: 'Вернуть на сегодня',
+                    icon: Icon(
+                      Icons.undo_rounded,
+                      size: 20,
+                      color: NeoTheme.cyan.withOpacity(0.65),
+                    ),
                     onPressed: () => _undoToday(item),
                   ),
                 ],
@@ -819,6 +812,7 @@ class _HabitReactorScreenState extends State<HabitReactorScreen> {
       ),
     );
   }
+
 
   Widget _buildArchiveVault(List<Habit> archived) {
     if (archived.isEmpty) {
